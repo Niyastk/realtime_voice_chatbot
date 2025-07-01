@@ -12,6 +12,9 @@ import collections
 import requests
 import json
 from datetime import datetime
+import pyttsx3
+import re
+import time
 
 # === CONFIGURATION ===
 OLLAMA_URL = "http://localhost:11434/api/chat"
@@ -46,7 +49,7 @@ class SpeechToLLMApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Speech to LLM - Voice Chatbot")
-        self.geometry("650x600")
+        self.geometry("700x600")
         self.resizable(False, False)
 
         # State
@@ -54,19 +57,19 @@ class SpeechToLLMApp(tk.Tk):
         self.stop_listening_flag = threading.Event()
         self.silence_duration = tk.DoubleVar(value=1.2)
         self.vad_aggressiveness = tk.IntVar(value=2)
-
-        # Conversation log
         self.conversation = []
+        self.tts_enabled = tk.BooleanVar(value=True)
 
         # Whisper and VAD
         self.whisper_model = None
         self.vad = None
+        self.tts_engine = pyttsx3.init()
+        self.tts_lock = threading.Lock()  # Prevent overlapping TTS
 
         self._build_ui()
         self._load_models_async()
 
     def _build_ui(self):
-        # Top Controls
         control_frame = ttk.Frame(self)
         control_frame.pack(fill="x", padx=10, pady=5)
 
@@ -81,15 +84,16 @@ class SpeechToLLMApp(tk.Tk):
         vad_spin = ttk.Spinbox(control_frame, from_=0, to=3, increment=1, textvariable=self.vad_aggressiveness, width=3)
         vad_spin.grid(row=0, column=4, padx=2)
 
-        save_btn = ttk.Button(control_frame, text="💾 Save Conversation", command=self.save_conversation)
-        save_btn.grid(row=0, column=5, padx=10)
+        tts_check = ttk.Checkbutton(control_frame, text="🔊 TTS", variable=self.tts_enabled)
+        tts_check.grid(row=0, column=5, padx=5)
 
-        # Status Label
+        save_btn = ttk.Button(control_frame, text="💾 Save Conversation", command=self.save_conversation)
+        save_btn.grid(row=0, column=6, padx=10)
+
         self.status_var = tk.StringVar(value="Ready.")
         status_label = ttk.Label(self, textvariable=self.status_var, foreground="blue")
         status_label.pack(anchor="w", padx=10, pady=2)
 
-        # Conversation Display
         self.chat_display = scrolledtext.ScrolledText(self, state="disabled", wrap="word", font=("Segoe UI", 11))
         self.chat_display.pack(fill="both", expand=True, padx=10, pady=5)
 
@@ -157,7 +161,7 @@ class SpeechToLLMApp(tk.Tk):
                     if text:
                         self.display_message("You", text)
                         self._set_status("Ollama is responding...")
-                        response = self.stream_ollama_chat(text)
+                        response = self.stream_ollama_chat_with_tts(text)
                         self.display_message("Ollama", response)
                         self._set_status("Listening... Speak again!")
                     else:
@@ -183,7 +187,7 @@ class SpeechToLLMApp(tk.Tk):
             os.remove(tmp_path)
         return text
 
-    def stream_ollama_chat(self, prompt):
+    def stream_ollama_chat_with_tts(self, prompt):
         headers = {"Content-Type": "application/json"}
         data = {
             "model": OLLAMA_MODEL,
@@ -193,6 +197,19 @@ class SpeechToLLMApp(tk.Tk):
             "stream": True
         }
         response_text = ""
+        buffer = ""
+        # Regex for sentence/phrase boundaries. Add ',' for shorter chunks.
+        sentence_end = re.compile(r'([.!?])')  # Add ',' if you want more frequent TTS
+
+        def speak(text):
+            if self.tts_enabled.get() and text.strip():
+                # Use a lock to prevent overlapping TTS
+                def tts_worker():
+                    with self.tts_lock:
+                        self.tts_engine.say(text)
+                        self.tts_engine.runAndWait()
+                threading.Thread(target=tts_worker, daemon=True).start()
+
         try:
             with requests.post(OLLAMA_URL, headers=headers, json=data, stream=True, timeout=120) as response:
                 response.raise_for_status()
@@ -205,8 +222,22 @@ class SpeechToLLMApp(tk.Tk):
                         self.chat_display.see(tk.END)
                         self.chat_display.config(state="disabled")
                         response_text += content
+                        buffer += content
+                        # Check for sentence-ending punctuation
+                        while True:
+                            match = sentence_end.search(buffer)
+                            if match:
+                                idx = match.end()
+                                sentence = buffer[:idx]
+                                speak(sentence)
+                                buffer = buffer[idx:]
+                            else:
+                                break
         except Exception as e:
             messagebox.showerror("Ollama Error", str(e))
+        # Speak any leftover buffer at the end
+        if buffer.strip():
+            speak(buffer.strip())
         self.chat_display.config(state="normal")
         self.chat_display.insert(tk.END, "\n")
         self.chat_display.config(state="disabled")
