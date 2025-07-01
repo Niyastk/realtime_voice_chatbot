@@ -46,6 +46,48 @@ let whisperSilenceDuration = 2000; // ms
 let micVizActive = false;
 let micVizAudioContext, micVizSource, micVizAnalyser, micVizAnimationId;
 
+function simpleMarkdown(text) {
+    // Escape HTML first
+    text = escapeHtml(text);
+    // Code blocks: ```python ... ```
+    text = text.replace(/```(\w+)?\n([\s\S]*?)```/g, (m, lang, code) => {
+        return `<pre class="chat-code-block"><code>${code}</code></pre>`;
+    });
+    // Inline code: `code`
+    text = text.replace(/`([^`]+)`/g, (m, code) => {
+        return `<code class="chat-inline-code">${code}</code>`;
+    });
+    // Bold: **text**
+    text = text.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+    // Italic: *text*
+    text = text.replace(/\*([^*]+)\*/g, '<i>$1</i>');
+    // Numbered lists: lines starting with 1. 2. etc.
+    text = text.replace(/(?:^|\n)(\d+\. .+(?:\n\d+\. .+)*)/g, function(m, list) {
+        const items = list.split(/\n(?=\d+\. )/).map(item => `<li>${item.replace(/^\d+\. /, '')}</li>`).join('');
+        return `<ol>${items}</ol>`;
+    });
+    // Bullet lists: lines starting with -
+    text = text.replace(/(?:^|\n)(- .+(?:\n- .+)*)/g, function(m, list) {
+        const items = list.split(/\n(?=- )/).map(item => `<li>${item.replace(/^- /, '')}</li>`).join('');
+        return `<ul>${items}</ul>`;
+    });
+    // Paragraphs
+    text = text.replace(/\n{2,}/g, '</p><p>');
+    text = '<p>' + text + '</p>';
+    return text;
+}
+
+function escapeHtml(str) {
+    return str.replace(/[&<>"]+/g, function(m) {
+        return ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;'
+        })[m];
+    });
+}
+
 function appendMessage(sender, message, opts = {}) {
     const msgDiv = document.createElement('div');
     msgDiv.className = 'msg ' + (sender === 'You' ? 'user' : 'bot');
@@ -55,13 +97,22 @@ function appendMessage(sender, message, opts = {}) {
     avatar.textContent = sender === 'You' ? '🧑' : '🤖';
     // Message text
     const textDiv = document.createElement('div');
-    textDiv.innerHTML = `<b>${sender}:</b> ${message}`;
+    if (sender === 'Ollama') {
+        textDiv.innerHTML = simpleMarkdown(message || '');
+    } else {
+        textDiv.innerHTML = `<b>${sender}:</b> ${message}`;
+    }
     // Timestamp
     const ts = document.createElement('span');
     ts.className = 'timestamp';
     ts.textContent = opts.timestamp || new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-    msgDiv.appendChild(sender === 'You' ? textDiv : avatar);
-    msgDiv.appendChild(sender === 'You' ? avatar : textDiv);
+    if (sender === 'You') {
+        msgDiv.appendChild(textDiv);
+        msgDiv.appendChild(avatar);
+    } else {
+        msgDiv.appendChild(avatar);
+        msgDiv.appendChild(textDiv);
+    }
     msgDiv.appendChild(ts);
     chatDisplay.appendChild(msgDiv);
     chatDisplay.scrollTop = chatDisplay.scrollHeight;
@@ -95,13 +146,14 @@ sendBtn.onclick = async () => {
     textInput.value = '';
     appendMessage('You', prompt);
     setStatus('Ollama is responding...');
+    showTypingIndicator();
     conversation.push(['You', prompt]);
     let response = '';
     let done = false;
-    // Use socket for streaming
     socket.emit('chat', { prompt });
     socket.on('chat_response', function handler(data) {
         if (data.error) {
+            hideTypingIndicator();
             appendMessage('Ollama', '[Error: ' + data.error + ']');
             setStatus('Ready.');
             socket.off('chat_response', handler);
@@ -109,17 +161,10 @@ sendBtn.onclick = async () => {
         }
         if (data.content) {
             response += data.content;
-            // Stream update: update the last Ollama bubble, or create if not present
-            let last = chatDisplay.lastElementChild;
-            if (!last || !last.classList.contains('bot')) {
-                appendMessage('Ollama', response);
-            } else {
-                // Update only the message text, keep avatar and timestamp
-                let textDiv = last.querySelector('div:not(.avatar)');
-                if (textDiv) textDiv.innerHTML = `<b>Ollama:</b> ${response}`;
-            }
         }
         if (data.done) {
+            hideTypingIndicator();
+            appendMessage('Ollama', response);
             conversation.push(['Ollama', response]);
             if (ttsToggle.checked) speakText(response);
             setStatus('Ready.');
@@ -231,7 +276,7 @@ recordBtn.onclick = async () => {
                             } else {
                                 // Update only the message text, keep avatar and timestamp
                                 let textDiv = last.querySelector('div:not(.avatar)');
-                                if (textDiv) textDiv.innerHTML = `<b>Ollama:</b> ${response}`;
+                                if (textDiv) textDiv.innerHTML = simpleMarkdown(response);
                             }
                         }
                         if (data.done) {
@@ -349,7 +394,7 @@ liveBtn.onclick = () => {
                             } else {
                                 // Update only the message text, keep avatar and timestamp
                                 let textDiv = last.querySelector('div:not(.avatar)');
-                                if (textDiv) textDiv.innerHTML = `<b>Ollama:</b> ${response}`;
+                                if (textDiv) textDiv.innerHTML = simpleMarkdown(response);
                             }
                         }
                         if (data.done) {
@@ -566,7 +611,7 @@ socket.on('whisper_final', data => {
                 } else {
                     // Update only the message text, keep avatar and timestamp
                     let textDiv = last.querySelector('div:not(.avatar)');
-                    if (textDiv) textDiv.innerHTML = `<b>Ollama:</b> ${response}`;
+                    if (textDiv) textDiv.innerHTML = simpleMarkdown(response);
                 }
             }
             if (data.done) {

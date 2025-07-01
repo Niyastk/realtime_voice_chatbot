@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;500&display=swap');
 :root {
     --user-bg: linear-gradient(135deg, #f8fafc 0%, #e0f7fa 100%);
     --user-color: #0d2b2b;
@@ -327,4 +328,42 @@ body, .container {
     background: linear-gradient(90deg, var(--primary-dark), var(--primary));
     box-shadow: 0 6px 24px rgba(0,180,216,0.18);
     transform: scale(1.04);
+}
+.chat-code-block {
+    background: #111;
+    color: #fff;
+    border-radius: 6px;
+    padding: 1em;
+    margin: 0.5em 0;
+    font-family: 'Fira Mono', 'Consolas', monospace;
+    font-size: 1em;
+    overflow-x: auto;
+}
+.chat-inline-code {
+    background: #222;
+    color: #fff;
+    border-radius: 4px;
+    padding: 0.1em 0.4em;
+    font-family: 'Fira Mono', 'Consolas', monospace;
+    font-size: 0.98em;
+}
+ol, ul {
+    margin: 0.5em 0 0.5em 2em;
+    padding: 0;
+    color: #fff;
+}
+li {
+    margin: 0.2em 0;
+    line-height: 1.5;
+}
+body.light-mode .chat-code-block {
+    background: #f5f5f5;
+    color: #222;
+}
+body.light-mode .chat-inline-code {
+    background: #eee;
+    color: #222;
+}
+body.light-mode ol, body.light-mode ul {
+    color: #222;
 } 
