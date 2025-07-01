@@ -19,6 +19,7 @@ from flask_cors import CORS
 import threading
 from flask_socketio import SocketIO, emit
 import base64
+import subprocess
 
 app = Flask(__name__)
 CORS(app)
@@ -148,7 +149,7 @@ def handle_chat_socket(data):
 def handle_whisper_stream(data):
     sid = request.sid
     action = data.get('action')
-    N_SECONDS = 5
+    N_SECONDS = 2
     if action == 'start':
         audio_stream_buffers[sid] = b''
         emit('whisper_partial', {'partial': ''})
@@ -160,42 +161,53 @@ def handle_whisper_stream(data):
         if chunk is not None:
             audio_bytes = base64.b64decode(chunk)
             audio_stream_buffers[sid] += audio_bytes
-            # Lower latency: run Whisper on last N seconds only for partials
-            bytes_per_sample = 2  # int16
-            samples_per_second = SAMPLE_RATE
-            n_samples = N_SECONDS * samples_per_second
-            total_samples = len(audio_stream_buffers[sid]) // bytes_per_sample
-            start_sample = max(0, total_samples - n_samples)
-            partial_bytes = audio_stream_buffers[sid][start_sample * bytes_per_sample:]
-            # Real-time partial transcription: run Whisper on the last N seconds
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmpfile:
-                scipy.io.wavfile.write(tmpfile.name, SAMPLE_RATE, np.frombuffer(partial_bytes, dtype=np.int16))
-                tmp_path = tmpfile.name
+            # Rolling window: use last N seconds of the buffer for partials
+            bytes_per_sample = 2  # int16 (for PCM, but here we use webm, so just use bytes)
+            # For webm, we use the last N seconds worth of bytes (approximate, since webm is compressed)
+            # We'll use the last N seconds of the buffer for partials
+            # Assume 32kbps (4KB/sec) for webm audio as a rough estimate
+            # For more accuracy, you could parse the webm header, but this is a good start
+            approx_bytes_per_sec = 4000
+            n_bytes = N_SECONDS * approx_bytes_per_sec
+            partial_bytes = audio_stream_buffers[sid][-n_bytes:]
+            with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as webmfile:
+                webmfile.write(partial_bytes)
+                webm_path = webmfile.name
+            wav_path = webm_path.replace('.webm', '.wav')
             try:
-                result = whisper_model.transcribe(tmp_path, fp16=False)
+                subprocess.run(['ffmpeg', '-y', '-i', webm_path, '-ar', str(SAMPLE_RATE), '-ac', '1', '-f', 'wav', wav_path], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                result = whisper_model.transcribe(wav_path, fp16=False)
                 partial = result['text'].strip()
                 emit('whisper_partial', {'partial': partial})
             except Exception as e:
                 emit('whisper_partial', {'error': str(e)})
             finally:
-                os.remove(tmp_path)
+                if os.path.exists(webm_path):
+                    os.remove(webm_path)
+                if os.path.exists(wav_path):
+                    os.remove(wav_path)
     elif action == 'stop':
         if sid not in audio_stream_buffers:
             emit('whisper_final', {'error': 'Session not initialized. Please restart streaming.'})
             return
         buffer = audio_stream_buffers.pop(sid, b'')
         if buffer:
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmpfile:
-                scipy.io.wavfile.write(tmpfile.name, SAMPLE_RATE, np.frombuffer(buffer, dtype=np.int16))
-                tmp_path = tmpfile.name
+            with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as webmfile:
+                webmfile.write(buffer)
+                webm_path = webmfile.name
+            wav_path = webm_path.replace('.webm', '.wav')
             try:
-                result = whisper_model.transcribe(tmp_path, fp16=False)
+                subprocess.run(['ffmpeg', '-y', '-i', webm_path, '-ar', str(SAMPLE_RATE), '-ac', '1', '-f', 'wav', wav_path], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                result = whisper_model.transcribe(wav_path, fp16=False)
                 final = result['text'].strip()
                 emit('whisper_final', {'final': final})
             except Exception as e:
                 emit('whisper_final', {'error': str(e)})
             finally:
-                os.remove(tmp_path)
+                if os.path.exists(webm_path):
+                    os.remove(webm_path)
+                if os.path.exists(wav_path):
+                    os.remove(wav_path)
         else:
             emit('whisper_final', {'final': ''})
 

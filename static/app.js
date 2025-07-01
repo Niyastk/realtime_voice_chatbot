@@ -419,6 +419,7 @@ function startWhisperStream() {
 
 // Handle partial and final transcriptions from backend
 socket.on('whisper_partial', data => {
+    console.log('Whisper partial:', data.partial);
     if (data.error) {
         setStatus('Whisper error: ' + data.error);
         return;
@@ -430,7 +431,11 @@ socket.on('whisper_partial', data => {
         liveMsg.id = 'whisper-live-msg';
         chatDisplay.appendChild(liveMsg);
     }
-    liveMsg.innerHTML = `<b>You (Whisper):</b> ${data.partial}`;
+    if (data.partial && data.partial.trim()) {
+        liveMsg.innerHTML = `<b>You (Whisper):</b> ${data.partial}`;
+    } else {
+        liveMsg.innerHTML = `<b>You (Whisper):</b> <i>Listening...</i>`;
+    }
     chatDisplay.scrollTop = chatDisplay.scrollHeight;
 });
 
