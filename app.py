@@ -1,3 +1,6 @@
+import eventlet
+eventlet.monkey_patch()
+
 from flask import Flask, request, jsonify, send_file, render_template
 import webrtcvad
 import whisper
@@ -14,12 +17,14 @@ import pyttsx3
 import re
 from flask_cors import CORS
 import threading
+from flask_socketio import SocketIO, emit
 
 app = Flask(__name__)
 CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 # --- CONFIG ---
-OLLAMA_URL = "http://localhost:11434/api/chat"
+OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
 OLLAMA_MODEL = "mistral:latest"
 WHISPER_MODEL_NAME = "base.en"
 SAMPLE_RATE = 16000
@@ -102,5 +107,39 @@ def clear_memory():
     llm_history = []
     return jsonify({'message': 'Chat memory cleared.'})
 
+@socketio.on('chat')
+def handle_chat_socket(data):
+    global llm_history, conversation
+    prompt = data.get('prompt', '')
+    if not prompt:
+        emit('chat_response', {'error': 'No prompt provided'})
+        return
+    llm_history.append({"role": "user", "content": prompt})
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "model": OLLAMA_MODEL,
+        "messages": llm_history,
+        "stream": True
+    }
+    response_text = ""
+    try:
+        with requests.post(OLLAMA_URL, headers=headers, json=payload, stream=True, timeout=120) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if line:
+                    chunk = json.loads(line.decode('utf-8'))
+                    content = chunk.get("message", {}).get("content", "")
+                    if content:
+                        emit('chat_response', {'content': content})
+                        response_text += content
+                        socketio.sleep(0)
+    except Exception as e:
+        emit('chat_response', {'error': str(e)})
+        return
+    conversation.append(("You", prompt))
+    conversation.append(("Ollama", response_text))
+    llm_history.append({"role": "assistant", "content": response_text})
+    emit('chat_response', {'done': True})
+
 if __name__ == "__main__":
-    app.run(debug=True) 
+    socketio.run(app, debug=True) 

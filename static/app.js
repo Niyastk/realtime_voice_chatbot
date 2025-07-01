@@ -11,6 +11,7 @@ let conversation = [];
 let isRecording = false;
 let mediaRecorder;
 let audioChunks = [];
+let socket = io();
 
 function appendMessage(sender, message) {
     const msgDiv = document.createElement('div');
@@ -31,24 +32,38 @@ sendBtn.onclick = async () => {
     appendMessage('You', prompt);
     setStatus('Ollama is responding...');
     conversation.push(['You', prompt]);
-    try {
-        const res = await fetch('/chat', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ prompt })
-        });
-        const data = await res.json();
-        if (data.response) {
-            appendMessage('Ollama', data.response);
-            conversation.push(['Ollama', data.response]);
-            if (ttsToggle.checked) speakText(data.response);
-        } else {
-            appendMessage('Ollama', '[Error: ' + (data.error || 'Unknown error') + ']');
+    let response = '';
+    let done = false;
+    // Use socket for streaming
+    socket.emit('chat', { prompt });
+    socket.on('chat_response', function handler(data) {
+        if (data.error) {
+            appendMessage('Ollama', '[Error: ' + data.error + ']');
+            setStatus('Ready.');
+            socket.off('chat_response', handler);
+            return;
         }
-    } catch (e) {
-        appendMessage('Ollama', '[Error: ' + e + ']');
-    }
-    setStatus('Ready.');
+        if (data.content) {
+            response += data.content;
+            // Stream update
+            if (!done) {
+                // Remove last Ollama message if present
+                let last = chatDisplay.lastElementChild;
+                if (last && last.className === 'msg' && last.innerHTML.startsWith('<b>Ollama:</b>')) {
+                    last.innerHTML = `<b>Ollama:</b> ${response}`;
+                } else {
+                    appendMessage('Ollama', data.content);
+                }
+            }
+        }
+        if (data.done) {
+            conversation.push(['Ollama', response]);
+            if (ttsToggle.checked) speakText(response);
+            setStatus('Ready.');
+            socket.off('chat_response', handler);
+            done = true;
+        }
+    });
 };
 
 textInput.addEventListener('keydown', e => {
@@ -83,20 +98,37 @@ recordBtn.onclick = async () => {
                     appendMessage('You', data.text);
                     conversation.push(['You', data.text]);
                     setStatus('Ollama is responding...');
-                    // Send to chat
-                    const chatRes = await fetch('/chat', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ prompt: data.text })
+                    // Send to chat via socket for streaming
+                    let response = '';
+                    let done = false;
+                    socket.emit('chat', { prompt: data.text });
+                    socket.on('chat_response', function handler(data) {
+                        if (data.error) {
+                            appendMessage('Ollama', '[Error: ' + data.error + ']');
+                            setStatus('Ready.');
+                            socket.off('chat_response', handler);
+                            return;
+                        }
+                        if (data.content) {
+                            response += data.content;
+                            // Stream update
+                            if (!done) {
+                                let last = chatDisplay.lastElementChild;
+                                if (last && last.className === 'msg' && last.innerHTML.startsWith('<b>Ollama:</b>')) {
+                                    last.innerHTML = `<b>Ollama:</b> ${response}`;
+                                } else {
+                                    appendMessage('Ollama', data.content);
+                                }
+                            }
+                        }
+                        if (data.done) {
+                            conversation.push(['Ollama', response]);
+                            if (ttsToggle.checked) speakText(response);
+                            setStatus('Ready.');
+                            socket.off('chat_response', handler);
+                            done = true;
+                        }
                     });
-                    const chatData = await chatRes.json();
-                    if (chatData.response) {
-                        appendMessage('Ollama', chatData.response);
-                        conversation.push(['Ollama', chatData.response]);
-                        if (ttsToggle.checked) speakText(chatData.response);
-                    } else {
-                        appendMessage('Ollama', '[Error: ' + (chatData.error || 'Unknown error') + ']');
-                    }
                 } else {
                     appendMessage('You', '[Could not transcribe audio]');
                 }

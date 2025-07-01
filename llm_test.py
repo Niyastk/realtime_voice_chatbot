@@ -1,7 +1,7 @@
 import requests
 import json
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
+OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
 MODEL = "mistral:latest"  # Change to any model you have installed
 
 def stream_chat(prompt):
