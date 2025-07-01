@@ -1,0 +1,11 @@
+flask
+flask-socketio
+eventlet
+flask-cors
+requests
+webrtcvad
+openai-whisper
+numpy
+sounddevice
+scipy
+pyttsx3 
