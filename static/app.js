@@ -7,6 +7,8 @@ const clearBtn = document.getElementById('clear-btn');
 const ttsToggle = document.getElementById('tts-toggle');
 const statusDiv = document.getElementById('status');
 const modeSelect = document.getElementById('transcribe-mode');
+const themeToggle = document.getElementById('theme-toggle');
+const micVisualizer = document.getElementById('mic-visualizer');
 
 let conversation = [];
 let isRecording = false;
@@ -41,10 +43,26 @@ let whisperAnalyser;
 let whisperSilenceThreshold = 0.01; // Adjust as needed
 let whisperSilenceDuration = 2000; // ms
 
-function appendMessage(sender, message) {
+let micVizActive = false;
+let micVizAudioContext, micVizSource, micVizAnalyser, micVizAnimationId;
+
+function appendMessage(sender, message, opts = {}) {
     const msgDiv = document.createElement('div');
-    msgDiv.className = 'msg';
-    msgDiv.innerHTML = `<b>${sender}:</b> ${message}`;
+    msgDiv.className = 'msg ' + (sender === 'You' ? 'user' : 'bot');
+    // Avatar
+    const avatar = document.createElement('div');
+    avatar.className = 'avatar';
+    avatar.textContent = sender === 'You' ? '🧑' : '🤖';
+    // Message text
+    const textDiv = document.createElement('div');
+    textDiv.innerHTML = `<b>${sender}:</b> ${message}`;
+    // Timestamp
+    const ts = document.createElement('span');
+    ts.className = 'timestamp';
+    ts.textContent = opts.timestamp || new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+    msgDiv.appendChild(sender === 'You' ? textDiv : avatar);
+    msgDiv.appendChild(sender === 'You' ? avatar : textDiv);
+    msgDiv.appendChild(ts);
     chatDisplay.appendChild(msgDiv);
     chatDisplay.scrollTop = chatDisplay.scrollHeight;
 }
@@ -52,6 +70,24 @@ function appendMessage(sender, message) {
 function setStatus(msg) {
     statusDiv.textContent = msg;
 }
+
+function setTheme(dark) {
+    if (dark) {
+        document.body.classList.add('dark');
+        themeToggle.textContent = '☀️';
+    } else {
+        document.body.classList.remove('dark');
+        themeToggle.textContent = '🌙';
+    }
+    localStorage.setItem('theme', dark ? 'dark' : 'light');
+}
+
+themeToggle.onclick = () => {
+    setTheme(!document.body.classList.contains('dark'));
+};
+
+// On load, apply saved theme
+setTheme(localStorage.getItem('theme') === 'dark');
 
 sendBtn.onclick = async () => {
     const prompt = textInput.value.trim();
@@ -73,15 +109,14 @@ sendBtn.onclick = async () => {
         }
         if (data.content) {
             response += data.content;
-            // Stream update
-            if (!done) {
-                // Remove last Ollama message if present
-                let last = chatDisplay.lastElementChild;
-                if (last && last.className === 'msg' && last.innerHTML.startsWith('<b>Ollama:</b>')) {
-                    last.innerHTML = `<b>Ollama:</b> ${response}`;
-                } else {
-                    appendMessage('Ollama', data.content);
-                }
+            // Stream update: update the last Ollama bubble, or create if not present
+            let last = chatDisplay.lastElementChild;
+            if (!last || !last.classList.contains('bot')) {
+                appendMessage('Ollama', response);
+            } else {
+                // Update only the message text, keep avatar and timestamp
+                let textDiv = last.querySelector('div:not(.avatar)');
+                if (textDiv) textDiv.innerHTML = `<b>Ollama:</b> ${response}`;
             }
         }
         if (data.done) {
@@ -98,12 +133,59 @@ textInput.addEventListener('keydown', e => {
     if (e.key === 'Enter') sendBtn.onclick();
 });
 
+function showMicVisualizer(stream) {
+    micVisualizer.style.display = '';
+    micVizActive = true;
+    micVizAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+    micVizSource = micVizAudioContext.createMediaStreamSource(stream);
+    micVizAnalyser = micVizAudioContext.createAnalyser();
+    micVizAnalyser.fftSize = 512;
+    micVizSource.connect(micVizAnalyser);
+    const canvas = micVisualizer;
+    const ctx = canvas.getContext('2d');
+    function draw() {
+        if (!micVizActive) return;
+        const width = canvas.width = canvas.offsetWidth;
+        const height = canvas.height;
+        ctx.clearRect(0, 0, width, height);
+        const data = new Uint8Array(micVizAnalyser.fftSize);
+        micVizAnalyser.getByteTimeDomainData(data);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = getComputedStyle(document.body).getPropertyValue('--primary') || '#2563eb';
+        ctx.beginPath();
+        const sliceWidth = width / data.length;
+        let x = 0;
+        for (let i = 0; i < data.length; i++) {
+            const v = data[i] / 128.0;
+            const y = (v * height) / 2;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+            x += sliceWidth;
+        }
+        ctx.lineTo(width, height / 2);
+        ctx.stroke();
+        micVizAnimationId = requestAnimationFrame(draw);
+    }
+    draw();
+}
+
+function hideMicVisualizer() {
+    micVisualizer.style.display = 'none';
+    micVizActive = false;
+    if (micVizAudioContext) {
+        micVizAudioContext.close();
+        micVizAudioContext = null;
+    }
+    if (micVizAnimationId) cancelAnimationFrame(micVizAnimationId);
+}
+
 recordBtn.onclick = async () => {
     if (isRecording) {
         mediaRecorder.stop();
         setStatus('Processing audio...');
         recordBtn.textContent = '🎤 Record';
         isRecording = false;
+        hideMicVisualizer();
     } else {
         if (!navigator.mediaDevices) {
             alert('Audio recording not supported.');
@@ -114,8 +196,11 @@ recordBtn.onclick = async () => {
         audioChunks = [];
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         mediaRecorder = new MediaRecorder(stream);
+        showMicVisualizer(stream);
         mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
         mediaRecorder.onstop = async () => {
+            stream.getTracks().forEach(track => track.stop());
+            hideMicVisualizer();
             const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
             const formData = new FormData();
             formData.append('audio', audioBlob, 'audio.wav');
@@ -139,14 +224,14 @@ recordBtn.onclick = async () => {
                         }
                         if (data.content) {
                             response += data.content;
-                            // Stream update
-                            if (!done) {
-                                let last = chatDisplay.lastElementChild;
-                                if (last && last.className === 'msg' && last.innerHTML.startsWith('<b>Ollama:</b>')) {
-                                    last.innerHTML = `<b>Ollama:</b> ${response}`;
-                                } else {
-                                    appendMessage('Ollama', data.content);
-                                }
+                            // Stream update: update the last Ollama bubble, or create if not present
+                            let last = chatDisplay.lastElementChild;
+                            if (!last || !last.classList.contains('bot')) {
+                                appendMessage('Ollama', response);
+                            } else {
+                                // Update only the message text, keep avatar and timestamp
+                                let textDiv = last.querySelector('div:not(.avatar)');
+                                if (textDiv) textDiv.innerHTML = `<b>Ollama:</b> ${response}`;
                             }
                         }
                         if (data.done) {
@@ -205,91 +290,99 @@ liveBtn.onclick = () => {
         alert('Web Speech API is not supported in this browser.');
         return;
     }
-    recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = 'en-US';
-    liveTranscript = '';
-    isRecognizing = true;
-    liveBtn.style.display = 'none';
-    stopLiveBtn.style.display = '';
-    setStatus('Listening (Web Speech)...');
-    recognition.onresult = (event) => {
-        let interim = '';
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-            if (event.results[i].isFinal) {
-                liveTranscript += event.results[i][0].transcript;
-            } else {
-                interim += event.results[i][0].transcript;
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+        showMicVisualizer(stream);
+        recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'en-US';
+        liveTranscript = '';
+        isRecognizing = true;
+        liveBtn.style.display = 'none';
+        stopLiveBtn.style.display = '';
+        setStatus('Listening (Web Speech)...');
+        recognition.onresult = (event) => {
+            let interim = '';
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+                if (event.results[i].isFinal) {
+                    liveTranscript += event.results[i][0].transcript;
+                } else {
+                    interim += event.results[i][0].transcript;
+                }
             }
-        }
-        // Show live transcript (final + interim)
-        let liveMsg = document.getElementById('live-msg');
-        if (!liveMsg) {
-            liveMsg = document.createElement('div');
-            liveMsg.className = 'msg';
-            liveMsg.id = 'live-msg';
-            chatDisplay.appendChild(liveMsg);
-        }
-        liveMsg.innerHTML = `<b>You (live):</b> ${liveTranscript + interim}`;
-        chatDisplay.scrollTop = chatDisplay.scrollHeight;
-        // Reset silence timer
-        clearTimeout(silenceTimeout);
-        silenceTimeout = setTimeout(() => {
-            if (liveTranscript.trim()) {
-                // Remove live message
-                if (liveMsg) liveMsg.remove();
-                appendMessage('You', liveTranscript.trim());
-                conversation.push(['You', liveTranscript.trim()]);
-                setStatus('Ollama is responding...');
-                // Send to Ollama via socket
-                let response = '';
-                let done = false;
-                socket.emit('chat', { prompt: liveTranscript.trim() });
-                socket.on('chat_response', function handler(data) {
-                    if (data.error) {
-                        appendMessage('Ollama', '[Error: ' + data.error + ']');
-                        setStatus('Ready.');
-                        socket.off('chat_response', handler);
-                        return;
-                    }
-                    if (data.content) {
-                        response += data.content;
-                        if (!done) {
+            // Show live transcript (final + interim)
+            let liveMsg = document.getElementById('live-msg');
+            if (!liveMsg) {
+                liveMsg = document.createElement('div');
+                liveMsg.className = 'msg';
+                liveMsg.id = 'live-msg';
+                chatDisplay.appendChild(liveMsg);
+            }
+            liveMsg.innerHTML = `<b>You (live):</b> ${liveTranscript + interim}`;
+            chatDisplay.scrollTop = chatDisplay.scrollHeight;
+            // Reset silence timer
+            clearTimeout(silenceTimeout);
+            silenceTimeout = setTimeout(() => {
+                if (liveTranscript.trim()) {
+                    // Remove live message
+                    if (liveMsg) liveMsg.remove();
+                    appendMessage('You', liveTranscript.trim());
+                    conversation.push(['You', liveTranscript.trim()]);
+                    setStatus('Ollama is responding...');
+                    // Send to Ollama via socket
+                    let response = '';
+                    let done = false;
+                    socket.emit('chat', { prompt: liveTranscript.trim() });
+                    socket.on('chat_response', function handler(data) {
+                        if (data.error) {
+                            appendMessage('Ollama', '[Error: ' + data.error + ']');
+                            setStatus('Ready.');
+                            socket.off('chat_response', handler);
+                            return;
+                        }
+                        if (data.content) {
+                            response += data.content;
+                            // Stream update: update the last Ollama bubble, or create if not present
                             let last = chatDisplay.lastElementChild;
-                            if (last && last.className === 'msg' && last.innerHTML.startsWith('<b>Ollama:</b>')) {
-                                last.innerHTML = `<b>Ollama:</b> ${response}`;
+                            if (!last || !last.classList.contains('bot')) {
+                                appendMessage('Ollama', response);
                             } else {
-                                appendMessage('Ollama', data.content);
+                                // Update only the message text, keep avatar and timestamp
+                                let textDiv = last.querySelector('div:not(.avatar)');
+                                if (textDiv) textDiv.innerHTML = `<b>Ollama:</b> ${response}`;
                             }
                         }
-                    }
-                    if (data.done) {
-                        conversation.push(['Ollama', response]);
-                        if (ttsToggle.checked) speakText(response);
-                        setStatus('Ready.');
-                        socket.off('chat_response', handler);
-                        done = true;
-                    }
-                });
-                liveTranscript = '';
-            }
-        }, 2000); // 2 seconds of silence
-    };
-    recognition.onend = () => {
-        isRecognizing = false;
-        liveBtn.style.display = '';
-        stopLiveBtn.style.display = 'none';
-        setStatus('Ready.');
-        clearTimeout(silenceTimeout);
-        let liveMsg = document.getElementById('live-msg');
-        if (liveMsg) liveMsg.remove();
-    };
-    recognition.onerror = (e) => {
-        setStatus('Web Speech error: ' + e.error);
-        recognition.stop();
-    };
-    recognition.start();
+                        if (data.done) {
+                            conversation.push(['Ollama', response]);
+                            if (ttsToggle.checked) speakText(response);
+                            setStatus('Ready.');
+                            socket.off('chat_response', handler);
+                            done = true;
+                        }
+                    });
+                    liveTranscript = '';
+                }
+            }, 2000); // 2 seconds of silence
+        };
+        recognition.onend = () => {
+            isRecognizing = false;
+            liveBtn.style.display = '';
+            stopLiveBtn.style.display = 'none';
+            setStatus('Ready.');
+            clearTimeout(silenceTimeout);
+            let liveMsg = document.getElementById('live-msg');
+            if (liveMsg) liveMsg.remove();
+            hideMicVisualizer();
+            stream.getTracks().forEach(track => track.stop());
+        };
+        recognition.onerror = (e) => {
+            setStatus('Web Speech error: ' + e.error);
+            recognition.stop();
+            hideMicVisualizer();
+            stream.getTracks().forEach(track => track.stop());
+        };
+        recognition.start();
+    });
 };
 
 stopLiveBtn.onclick = () => {
@@ -346,6 +439,7 @@ function startWhisperStream() {
             clearTimeout(whisperSilenceTimeout);
             whisperSilenceTimeout = null;
         }
+        hideMicVisualizer();
         socket.emit('whisper_stream', { action: 'stop' });
         setStatus('Processing final transcript...');
         return;
@@ -357,6 +451,7 @@ function startWhisperStream() {
     socket.emit('whisper_stream', { action: 'start' });
     whisperAudioChunks = [];
     navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+        showMicVisualizer(stream);
         whisperMediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
         whisperMediaRecorder.start(500); // 500ms chunks
         whisperMediaRecorder.ondataavailable = async (e) => {
@@ -377,6 +472,7 @@ function startWhisperStream() {
                 clearTimeout(whisperSilenceTimeout);
                 whisperSilenceTimeout = null;
             }
+            hideMicVisualizer();
         };
         // --- Silence detection ---
         whisperAudioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -463,13 +559,14 @@ socket.on('whisper_final', data => {
             }
             if (data.content) {
                 response += data.content;
-                if (!done) {
-                    let last = chatDisplay.lastElementChild;
-                    if (last && last.className === 'msg' && last.innerHTML.startsWith('<b>Ollama:</b>')) {
-                        last.innerHTML = `<b>Ollama:</b> ${response}`;
-                    } else {
-                        appendMessage('Ollama', data.content);
-                    }
+                // Stream update: update the last Ollama bubble, or create if not present
+                let last = chatDisplay.lastElementChild;
+                if (!last || !last.classList.contains('bot')) {
+                    appendMessage('Ollama', response);
+                } else {
+                    // Update only the message text, keep avatar and timestamp
+                    let textDiv = last.querySelector('div:not(.avatar)');
+                    if (textDiv) textDiv.innerHTML = `<b>Ollama:</b> ${response}`;
                 }
             }
             if (data.done) {
@@ -485,4 +582,20 @@ socket.on('whisper_final', data => {
     }
     whisperStreamActive = false;
     window.whisperStreamBtn.textContent = '🌀 Start Whisper Stream';
-}); 
+});
+
+function showTypingIndicator() {
+    if (document.getElementById('typing-indicator')) return;
+    const typingDiv = document.createElement('div');
+    typingDiv.className = 'typing-indicator';
+    typingDiv.id = 'typing-indicator';
+    typingDiv.innerHTML = '<span class="avatar">🤖</span>' +
+        '<span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>';
+    chatDisplay.appendChild(typingDiv);
+    chatDisplay.scrollTop = chatDisplay.scrollHeight;
+}
+
+function hideTypingIndicator() {
+    const typingDiv = document.getElementById('typing-indicator');
+    if (typingDiv) typingDiv.remove();
+} 

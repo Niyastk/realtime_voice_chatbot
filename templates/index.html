@@ -7,7 +7,9 @@
 </head>
 <body>
     <div class="container">
-        <h2>Speech to LLM - Voice Chatbot</h2>
+        <h2>Speech to LLM - Voice Chatbot
+            <button id="theme-toggle" class="theme-toggle" title="Toggle theme">🌙</button>
+        </h2>
         <div class="mode-select" style="margin-bottom: 12px;">
             <label for="transcribe-mode"><b>Transcription Mode:</b></label>
             <select id="transcribe-mode">
@@ -17,14 +19,15 @@
             </select>
         </div>
         <div id="chat-display" class="chat-display"></div>
+        <canvas id="mic-visualizer" height="40" style="width:100%;display:none;margin-bottom:0;"></canvas>
         <div class="controls">
             <input type="text" id="text-input" placeholder="Type your message...">
             <button id="send-btn">Send</button>
             <button id="record-btn">🎤 Record</button>
         </div>
         <div class="actions">
-            <button id="save-btn">💾 Save Conversation</button>
-            <button id="clear-btn">🧹 Clear Memory</button>
+            <button id="save-btn" class="action-btn">💾 Save Conversation</button>
+            <button id="clear-btn" class="action-btn">🧹 Clear Memory</button>
             <label><input type="checkbox" id="tts-toggle" checked> Enable TTS</label>
         </div>
         <div id="status" class="status"></div>
