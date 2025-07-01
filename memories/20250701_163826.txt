@@ -1,0 +1,6 @@
+User: Hey, how are you?
+
+Ollama:  Hello! I'm just a computer program, so I don't have feelings, but I'm here and ready to help you. How can I assist you today?
+
+In case you were wondering, as a human interacts with me, I learn from our interactions, helping me provide better responses in the future. But remember, I don't have personal experiences or feelings like humans do!
+
