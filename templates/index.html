@@ -8,6 +8,14 @@
 <body>
     <div class="container">
         <h2>Speech to LLM - Voice Chatbot</h2>
+        <div class="mode-select" style="margin-bottom: 12px;">
+            <label for="transcribe-mode"><b>Transcription Mode:</b></label>
+            <select id="transcribe-mode">
+                <option value="webspeech">Web Speech (Browser)</option>
+                <option value="whisper">Whisper (Offline, Streaming)</option>
+                <option value="audio">Audio Upload (Whisper)</option>
+            </select>
+        </div>
         <div id="chat-display" class="chat-display"></div>
         <div class="controls">
             <input type="text" id="text-input" placeholder="Type your message...">

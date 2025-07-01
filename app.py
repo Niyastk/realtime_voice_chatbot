@@ -18,6 +18,7 @@ import re
 from flask_cors import CORS
 import threading
 from flask_socketio import SocketIO, emit
+import base64
 
 app = Flask(__name__)
 CORS(app)
@@ -37,6 +38,8 @@ llm_history = []
 whisper_model = whisper.load_model(WHISPER_MODEL_NAME)
 tts_engine = pyttsx3.init()
 tts_lock = threading.Lock()
+
+audio_stream_buffers = {}
 
 @app.route('/')
 def index():
@@ -140,6 +143,61 @@ def handle_chat_socket(data):
     conversation.append(("Ollama", response_text))
     llm_history.append({"role": "assistant", "content": response_text})
     emit('chat_response', {'done': True})
+
+@socketio.on('whisper_stream')
+def handle_whisper_stream(data):
+    sid = request.sid
+    action = data.get('action')
+    N_SECONDS = 5
+    if action == 'start':
+        audio_stream_buffers[sid] = b''
+        emit('whisper_partial', {'partial': ''})
+    elif action == 'audio':
+        if sid not in audio_stream_buffers:
+            emit('whisper_partial', {'error': 'Session not initialized. Please restart streaming.'})
+            return
+        chunk = data.get('audio')
+        if chunk is not None:
+            audio_bytes = base64.b64decode(chunk)
+            audio_stream_buffers[sid] += audio_bytes
+            # Lower latency: run Whisper on last N seconds only for partials
+            bytes_per_sample = 2  # int16
+            samples_per_second = SAMPLE_RATE
+            n_samples = N_SECONDS * samples_per_second
+            total_samples = len(audio_stream_buffers[sid]) // bytes_per_sample
+            start_sample = max(0, total_samples - n_samples)
+            partial_bytes = audio_stream_buffers[sid][start_sample * bytes_per_sample:]
+            # Real-time partial transcription: run Whisper on the last N seconds
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmpfile:
+                scipy.io.wavfile.write(tmpfile.name, SAMPLE_RATE, np.frombuffer(partial_bytes, dtype=np.int16))
+                tmp_path = tmpfile.name
+            try:
+                result = whisper_model.transcribe(tmp_path, fp16=False)
+                partial = result['text'].strip()
+                emit('whisper_partial', {'partial': partial})
+            except Exception as e:
+                emit('whisper_partial', {'error': str(e)})
+            finally:
+                os.remove(tmp_path)
+    elif action == 'stop':
+        if sid not in audio_stream_buffers:
+            emit('whisper_final', {'error': 'Session not initialized. Please restart streaming.'})
+            return
+        buffer = audio_stream_buffers.pop(sid, b'')
+        if buffer:
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmpfile:
+                scipy.io.wavfile.write(tmpfile.name, SAMPLE_RATE, np.frombuffer(buffer, dtype=np.int16))
+                tmp_path = tmpfile.name
+            try:
+                result = whisper_model.transcribe(tmp_path, fp16=False)
+                final = result['text'].strip()
+                emit('whisper_final', {'final': final})
+            except Exception as e:
+                emit('whisper_final', {'error': str(e)})
+            finally:
+                os.remove(tmp_path)
+        else:
+            emit('whisper_final', {'final': ''})
 
 if __name__ == "__main__":
     socketio.run(app, debug=True) 
