@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Speech to LLM - Voice Chatbot</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <h2>Speech to LLM - Voice Chatbot</h2>
+        <div id="chat-display" class="chat-display"></div>
+        <div class="controls">
+            <input type="text" id="text-input" placeholder="Type your message...">
+            <button id="send-btn">Send</button>
+            <button id="record-btn">🎤 Record</button>
+        </div>
+        <div class="actions">
+            <button id="save-btn">💾 Save Conversation</button>
+            <button id="clear-btn">🧹 Clear Memory</button>
+            <label><input type="checkbox" id="tts-toggle" checked> Enable TTS</label>
+        </div>
+        <div id="status" class="status"></div>
+    </div>
+    <script src="/static/app.js"></script>
+</body>
+</html> 
