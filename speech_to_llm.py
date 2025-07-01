@@ -43,7 +43,7 @@ class SpeechToLLMApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Speech to LLM - Voice Chatbot")
-        self.geometry("700x700")
+        self.geometry("700x750")
         self.resizable(False, False)
 
         # State
@@ -52,11 +52,11 @@ class SpeechToLLMApp(tk.Tk):
         self.silence_duration = tk.DoubleVar(value=1.2)
         self.vad_aggressiveness = tk.IntVar(value=2)
         self.tts_enabled = tk.BooleanVar(value=True)
-        self.listen_mode = tk.StringVar(value="continuous")  # or "push"
         self.conversation = []
         self.whisper_model = None
         self.tts_engine = pyttsx3.init()
         self.tts_lock = threading.Lock()
+        self.llm_history = []  # For LLM context memory
 
         self._build_ui()
         self._load_models_async()
@@ -86,6 +86,9 @@ class SpeechToLLMApp(tk.Tk):
 
         save_btn = ttk.Button(control_frame, text="💾 Save Conversation", command=self.save_conversation)
         save_btn.grid(row=0, column=5, padx=10)
+
+        clear_btn = ttk.Button(control_frame, text="🧹 Clear Memory", command=self.clear_llm_memory)
+        clear_btn.grid(row=0, column=6, padx=5)
 
         self.status_var = tk.StringVar(value="Ready.")
         status_label = ttk.Label(self, textvariable=self.status_var, foreground="blue")
@@ -191,10 +194,13 @@ class SpeechToLLMApp(tk.Tk):
         return text
 
     def stream_ollama_chat_with_tts(self, prompt):
+        # Add user message to history (for LLM context)
+        self.llm_history.append({"role": "user", "content": prompt})
+
         headers = {"Content-Type": "application/json"}
         data = {
             "model": OLLAMA_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": self.llm_history,  # <-- Send the whole history!
             "stream": True
         }
         response_text = ""
@@ -238,6 +244,8 @@ class SpeechToLLMApp(tk.Tk):
         self.chat_display.config(state="disabled")
         self.conversation.append(("You", prompt))
         self.conversation.append(("Ollama", response_text))
+        # Add assistant message to history for context
+        self.llm_history.append({"role": "assistant", "content": response_text})
         return response_text
 
     def display_message(self, sender, message):
@@ -272,6 +280,10 @@ class SpeechToLLMApp(tk.Tk):
             for sender, msg in self.conversation:
                 f.write(f"{sender}: {msg}\n\n")
         messagebox.showinfo("Save Conversation", f"Conversation saved to {filename}")
+
+    def clear_llm_memory(self):
+        self.llm_history = []
+        self._set_status("Chat memory cleared.")
 
 if __name__ == "__main__":
     app = SpeechToLLMApp()
